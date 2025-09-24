@@ -11,7 +11,7 @@ Tableau Server의 데이터 원본을 Tableau Cloud로 자동 마이그레이션
 ## 설치 방법
 ```bash
 # 저장소 복제
-git clone https://github.com/your-username/tableau-migration-tool.git
+git clone https://github.com/giyori91/tableau-migration-tool.git
 cd tableau-migration-tool
 
 # 실행 권한 부여
