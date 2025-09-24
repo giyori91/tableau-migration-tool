@@ -1,0 +1,4 @@
+tableauserverclient>=0.17.0
+python-dotenv>=0.19.0
+tqdm>=4.65.0
+prometheus_client>=0.17.0
