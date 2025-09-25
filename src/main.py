@@ -104,15 +104,93 @@ class TableauMigrationWorker:
     def migrate_all_datasources(self):
         """모든 데이터 원본 마이그레이션"""
         try:
+            migration_results = {
+                'total': 0,
+                'success': 0,
+                'failed': 0,
+                'details': []
+            }
+
+            print("\n1. 데이터 원본 수집 중...")
             with self.tableau_connection(is_cloud=False) as server:
                 all_datasources, _ = server.datasources.get()
+                migration_results['total'] = len(all_datasources)
+
+                # 프로그레스바로 데이터 원본 정보 수집
+                print("\n2. 데이터 원본 상세 정보:")
+                print(f"{'데이터 원본명':<30} {'최종 수정일':<20} {'소유자':<20}")
+                print("-" * 70)
                 
-            # 서버 연결 밖에서 마이그레이션 수행
-            for ds in all_datasources:
-                self.migrate_datasource(ds)
-                
+                for ds in tqdm(all_datasources, desc="데이터 원본 정보 수집"):
+                    ds = server.datasources.get_by_id(ds.id)
+                    updated_at = ds.updated_at.strftime('%Y-%m-%d %H:%M:%S') if ds.updated_at else 'N/A'
+                    owner = ds.owner_id if hasattr(ds, 'owner_id') else 'Unknown'
+                    
+                    print(f"{ds.name:<30} {updated_at:<20} {owner:<20}")
+                    migration_results['details'].append({
+                        'name': ds.name,
+                        'updated_at': updated_at,
+                        'owner': owner,
+                        'status': 'pending'
+                    })
+
+            # 마이그레이션 실행
+            print("\n3. 마이그레이션 실행 중...")
+            for ds in tqdm(all_datasources, desc="마이그레이션 진행"):
+                try:
+                    self.migrate_datasource(ds)
+                    migration_results['success'] += 1
+                    # 결과 상태 업데이트
+                    for detail in migration_results['details']:
+                        if detail['name'] == ds.name:
+                            detail['status'] = 'success'
+                except Exception as e:
+                    migration_results['failed'] += 1
+                    # 결과 상태 업데이트
+                    for detail in migration_results['details']:
+                        if detail['name'] == ds.name:
+                            detail['status'] = 'failed'
+                            detail['error'] = str(e)
+
+            # 최종 결과 출력
+            print("\n4. 마이그레이션 결과 요약:")
+            print(f"총 데이터 원본 수: {migration_results['total']}")
+            print(f"성공: {migration_results['success']}")
+            print(f"실패: {migration_results['failed']}")
+
+            # 성공/실패 상세 내역
+            if migration_results['success'] > 0:
+                print("\n5. 성공한 데이터 원본:")
+                for detail in migration_results['details']:
+                    if detail['status'] == 'success':
+                        print(f"✓ {detail['name']} ({detail['updated_at']})")
+
+            if migration_results['failed'] > 0:
+                print("\n6. 실패한 데이터 원본:")
+                for detail in migration_results['details']:
+                    if detail['status'] == 'failed':
+                        print(f"✗ {detail['name']}: {detail.get('error', 'Unknown error')}")
+
         except Exception as e:
             self.logger.error(f"Failed to migrate all datasources: {str(e)}")
+
+    def check_update_needed(self, updated_at):
+        """업데이트 필요 여부 확인"""
+        if not updated_at:
+            return False
+            
+        time_diff = datetime.now(updated_at.tzinfo) - updated_at
+        criteria_type = self.config.update_criteria['type']
+        criteria_value = self.config.update_criteria['value']
+        
+        if criteria_type == 'days':
+            return time_diff.days < criteria_value
+        elif criteria_type == 'hours':
+            return time_diff.total_seconds() / 3600 < criteria_value
+        elif criteria_type == 'minutes':
+            return time_diff.total_seconds() / 60 < criteria_value
+        
+        return False
 
     def migrate_updated_datasources(self):
         """업데이트된 데이터 원본 마이그레이션"""
@@ -137,14 +215,13 @@ class TableauMigrationWorker:
                     ds = server.datasources.get_by_id(ds.id)
                     
                     if ds.updated_at:
-                        time_diff = datetime.now(ds.updated_at.tzinfo) - ds.updated_at
                         status = {
                             'name': ds.name,
                             'updated_at': ds.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
                             'status': 'pending'
                         }
                         
-                        if time_diff.days < 1:
+                        if self.check_update_needed(ds.updated_at):
                             status['status'] = 'update_needed'
                             updated_datasources.append(ds)
                             migration_results['updated'] += 1
@@ -200,16 +277,76 @@ class TableauMigrationWorker:
         except Exception as e:
             self.logger.error(f"Failed to migrate updated datasources: {str(e)}")
 
+    def list_cloud_projects(self):
+        """Tableau Cloud의 프로젝트 목록 조회"""
+        try:
+            with self.tableau_connection(is_cloud=True) as cloud:
+                all_projects, _ = cloud.projects.get()
+                
+                print("\n사용 가능한 프로젝트 목록:")
+                print(f"{'번호':<4} {'프로젝트명':<30} {'프로젝트 ID':<36}")
+                print("-" * 70)
+                
+                for idx, project in enumerate(all_projects, 1):
+                    print(f"{idx:<4} {project.name:<30} {project.id:<36}")
+                
+                return all_projects
+        except Exception as e:
+            self.logger.error(f"프로젝트 목록 조회 실패: {str(e)}")
+            raise
+
+    def select_and_save_project(self, number, projects):
+        """선택된 프로젝트를 properties.env에 저장"""
+        try:
+            if not (1 <= number <= len(projects)):
+                raise ValueError("잘못된 프로젝트 번호입니다.")
+            
+            selected_project = projects[number - 1]
+            
+            # properties.env 파일 읽기
+            with open('properties.env', 'r') as f:
+                lines = f.readlines()
+            
+            # TC_PROJECT_ID 업데이트
+            updated = False
+            for i, line in enumerate(lines):
+                if line.startswith('TC_PROJECT_ID='):
+                    lines[i] = f"TC_PROJECT_ID='{selected_project.id}'\n"
+                    updated = True
+                    break
+            
+            # TC_PROJECT_ID가 없으면 추가
+            if not updated:
+                lines.append(f"\nTC_PROJECT_ID='{selected_project.id}'\n")
+            
+            # 파일 저장
+            with open('properties.env', 'w') as f:
+                f.writelines(lines)
+            
+            return f"\n설정된 프로젝트 정보:\n이름: {selected_project.name}\nID: {selected_project.id}"
+        
+        except Exception as e:
+            self.logger.error(f"프로젝트 설정 실패: {str(e)}")
+            raise
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Tableau 데이터 원본 마이그레이션 도구')
-    parser.add_argument('--mode', choices=['all', 'updated'], 
-                       default='updated',
-                       help='마이그레이션 모드 선택 (all: 전체, updated: 업데이트된 항목만)')
-    
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['all', 'updated', 'list-projects', 'select-project'], required=True)
+    parser.add_argument('--number', type=int, help='프로젝트 번호')
     args = parser.parse_args()
+    
     worker = TableauMigrationWorker()
     
     if args.mode == 'all':
         worker.migrate_all_datasources()
-    else:
+    elif args.mode == 'updated':
         worker.migrate_updated_datasources()
+    elif args.mode == 'list-projects':
+        worker.list_cloud_projects()
+    elif args.mode == 'select-project':
+        if not args.number:
+            print("프로젝트 번호가 필요합니다.")
+            sys.exit(1)
+        projects = worker.list_cloud_projects()
+        print(worker.select_and_save_project(args.number, projects))

@@ -9,6 +9,7 @@ Tableau Server의 데이터 원본을 Tableau Cloud로 자동 마이그레이션
 - 전체 또는 최근 업데이트된 데이터 원본 선택적 마이그레이션
 - 실시간 진행 상황 모니터링 
 - 상세 마이그레이션 결과 리포트
+- Tableau Cloud 프로젝트 설정 도구
 
 ## 시작하기
 
@@ -26,12 +27,11 @@ Tableau Server의 데이터 원본을 Tableau Cloud로 자동 마이그레이션
 git clone https://github.com/yourorg/tableau-migration-tool.git
 cd tableau-migration-tool
 
-# 가상환경 생성 및 활성화 
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# 실행 권한 부여
+chmod +x run.sh
 
-# 의존성 설치
-pip install -r requirements.txt
+# 실행
+./run.sh
 ```
 
 ### 환경 설정
@@ -51,28 +51,105 @@ TC_SITE='your-site'
 TC_PAT_NAME='your-cloud-pat'
 TC_PAT_SECRET='your-cloud-secret'
 TC_PROJECT_ID='target-project-id'
+
+# 업데이트 기준 설정
+UPDATE_CRITERIA_TYPE='days'    # 가능한 값: days, hours, minutes
+UPDATE_CRITERIA_VALUE='1'      # 숫자값: 업데이트 기준 기간
 ```
 
-### 실행
+### 사용 방법
+
+실행 스크립트(`run.sh`)를 실행하면 다음 메뉴가 표시됩니다:
+
+1. **전체 데이터 원본 마이그레이션**
+   - Tableau Server의 모든 데이터 원본을 Cloud로 마이그레이션
+   - 진행 상황과 결과가 실시간으로 표시
+
+2. **업데이트된 데이터 원본만 마이그레이션**
+   - 설정된 기간 내에 업데이트된 데이터 원본만 마이그레이션
+   - 업데이트 기준은 `properties.env`에서 설정 가능
+   ```env
+   # 예: 3일 이내 업데이트
+   UPDATE_CRITERIA_TYPE='days'
+   UPDATE_CRITERIA_VALUE='3'
+   
+   # 예: 12시간 이내 업데이트
+   UPDATE_CRITERIA_TYPE='hours'
+   UPDATE_CRITERIA_VALUE='12'
+   ```
+
+3. **Tableau Cloud 프로젝트 설정**
+   - Cloud의 사용 가능한 프로젝트 목록 표시
+   - 프로젝트 선택 시 자동으로 `properties.env` 파일에 설정
+   - 마이그레이션 대상 프로젝트를 쉽게 변경 가능
+
+### 실행 결과
+
+- 마이그레이션 진행 상황이 실시간으로 표시
+- 성공/실패 항목 구분 표시
+- 오류 발생 시 상세 메시지 제공
+- 최종 결과 요약 리포트 제공
+
+### 스케줄링 설정
+
+#### macOS에서 설정
+
+1. crontab 편집:
+```bash
+crontab -e
+```
+
+2. 원하는 스케줄로 실행 명령 추가:
+```bash
+# 매일 자정에 업데이트된 데이터 원본 마이그레이션
+0 0 * * * cd /path/to/tableau-migration-tool && ./run.sh << EOF
+2
+EOF
+
+# 매주 일요일 새벽 3시에 전체 마이그레이션
+0 3 * * 0 cd /path/to/tableau-migration-tool && ./run.sh << EOF
+1
+EOF
+```
+
+#### 로깅 설정
+
+자동 실행 시 로그를 저장하려면 다음과 같이 설정:
 
 ```bash
-# 실행 권한 부여
-chmod +x run.sh
-
-# 실행
-./run.sh
+# 로그 파일과 함께 실행
+0 0 * * * cd /path/to/tableau-migration-tool && ./run.sh << EOF
+2
+EOF >> /path/to/tableau-migration-tool/logs/migration_$(date +\%Y\%m\%d).log 2>&1
 ```
 
-## 사용 방법
+#### 주요 스케줄링 예시
 
-1. 전체 마이그레이션
+- 매일 특정 시간 실행:
 ```bash
-python src/main.py --mode all
+0 3 * * * # 매일 새벽 3시
 ```
 
-2. 최근 업데이트된 데이터 원본만 마이그레이션
-```bash 
-python src/main.py --mode updated
+- 주중(월-금)만 실행:
+```bash
+0 1 * * 1-5 # 평일 새벽 1시
+```
+
+- 특정 간격으로 실행:
+```bash
+0 */4 * * * # 4시간마다
+```
+
+#### 스케줄링 모니터링
+
+- 로그 확인:
+```bash
+tail -f /path/to/tableau-migration-tool/logs/migration_$(date +%Y%m%d).log
+```
+
+- cron 작업 목록 확인:
+```bash
+crontab -l
 ```
 
 ## 라이선스

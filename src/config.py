@@ -23,6 +23,12 @@ class Config:
             'project_id': os.getenv('TC_PROJECT_ID')
         }
 
+        # 업데이트 기준 설정
+        self.update_criteria = {
+            'value': int(os.getenv('UPDATE_CRITERIA_VALUE', 1)),
+            'type': os.getenv('UPDATE_CRITERIA_TYPE', 'days')
+        }
+
     def validate(self):
         """설정값 검증"""
         # Server 설정 검증
